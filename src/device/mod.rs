@@ -722,8 +722,7 @@ impl Device {
                         .tunnel
                         .decapsulate(Some(peer_addr), src, &mut t.dst_buf[..])
                     {
-                        TunnResult::Done => {}
-                        TunnResult::Err(e) => eprintln!("Decapsulate error {:?}", e),
+                        TunnResult::Done | TunnResult::Err(_)  => {}
                         TunnResult::WriteToNetwork(packet) => {
                             flush = true;
                             udp.write(packet);
