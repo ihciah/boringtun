@@ -33,8 +33,8 @@ use std::convert::From;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -78,8 +78,10 @@ pub enum Error {
 
 // What the event loop should do after a handler returns
 enum Action {
-    Continue, // Continue the loop
-    Yield,    // Yield the read lock and acquire it again
+    Continue,
+    // Continue the loop
+    Yield,
+    // Yield the read lock and acquire it again
     Exit,     // Stop the loop
 }
 
@@ -87,7 +89,8 @@ enum Action {
 type Handler = Box<dyn Fn(&mut LockReadGuard<Device>, &mut ThreadData) -> Action + Send + Sync>;
 
 pub struct DeviceHandle {
-    device: Arc<Lock<Device>>, // The interface this handle owns
+    device: Arc<Lock<Device>>,
+    // The interface this handle owns
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -168,6 +171,38 @@ impl DeviceHandle {
         })
     }
 
+    pub fn new_with_notify(name: &str, config: DeviceConfig, exit_notify: Arc<AtomicBool>) -> Result<DeviceHandle, Error> {
+        let n_threads = config.n_threads;
+        let mut wg_interface = Device::new(name, config)?;
+        wg_interface.open_listen_socket(0)?; // Start listening on a random port
+
+        let interface_lock = Arc::new(Lock::new(wg_interface));
+
+        let mut threads = vec![];
+        let live_cnt = Arc::new(Mutex::new(n_threads));
+
+        for i in 0..n_threads {
+            threads.push({
+                let dev = Arc::clone(&interface_lock);
+                let live_cnt_copy = live_cnt.clone();
+                let exit_notify_copy = exit_notify.clone();
+                thread::spawn(move || {
+                    DeviceHandle::event_loop(i, &dev);
+                    let mut cnt = live_cnt_copy.lock().unwrap();
+                    *cnt -= 1;
+                    if *cnt == 0 {
+                        exit_notify_copy.store(true, Ordering::Relaxed);
+                    }
+                })
+            });
+        }
+
+        Ok(DeviceHandle {
+            device: interface_lock,
+            threads,
+        })
+    }
+
     pub fn wait(&mut self) {
         while let Some(thread) = self.threads.pop() {
             thread.join().unwrap();
@@ -183,7 +218,7 @@ impl DeviceHandle {
 
     fn event_loop(_i: usize, device: &Lock<Device>) {
         #[cfg(target_os = "linux")]
-        let mut thread_local = ThreadData {
+            let mut thread_local = ThreadData {
             src_buf: [0u8; MAX_UDP_SIZE],
             dst_buf: [0u8; MAX_UDP_SIZE],
             iface: if _i == 0 || !device.read().config.use_multi_queue {
@@ -208,7 +243,7 @@ impl DeviceHandle {
         };
 
         #[cfg(not(target_os = "linux"))]
-        let mut thread_local = ThreadData {
+            let mut thread_local = ThreadData {
             src_buf: [0u8; MAX_UDP_SIZE],
             dst_buf: [0u8; MAX_UDP_SIZE],
             iface: Arc::clone(&device.read().iface),
@@ -307,7 +342,7 @@ impl Device {
             next_index,
             None,
         )
-        .unwrap();
+            .unwrap();
 
         if self.config.log_level > Verbosity::None {
             let pub_key = base64::encode(pub_key.as_bytes());
@@ -364,15 +399,15 @@ impl Device {
         device.register_timers()?;
 
         #[cfg(target_os = "macos")]
-        {
-            // Only for macOS write the actual socket name into WG_TUN_NAME_FILE
-            if let Ok(name_file) = std::env::var("WG_TUN_NAME_FILE") {
-                if name == "utun" {
-                    std::fs::write(&name_file, device.iface.name().unwrap().as_bytes()).unwrap();
-                    device.cleanup_paths.push(name_file);
+            {
+                // Only for macOS write the actual socket name into WG_TUN_NAME_FILE
+                if let Ok(name_file) = std::env::var("WG_TUN_NAME_FILE") {
+                    if name == "utun" {
+                        std::fs::write(&name_file, device.iface.name().unwrap().as_bytes()).unwrap();
+                        device.cleanup_paths.push(name_file);
+                    }
                 }
             }
-        }
 
         Ok(device)
     }
@@ -444,7 +479,7 @@ impl Device {
                     Some(Arc::clone(&rate_limiter)),
                 )
             }
-            .is_err()
+                .is_err()
             {
                 // In case we encounter an error, we will remove that peer
                 // An error will be a result of bad public key/secret key combination
@@ -639,7 +674,7 @@ impl Device {
                     if flush {
                         // Flush pending queue
                         while let TunnResult::WriteToNetwork(packet) =
-                            peer.tunnel.decapsulate(None, &[], &mut t.dst_buf[..])
+                        peer.tunnel.decapsulate(None, &[], &mut t.dst_buf[..])
                         {
                             udp.write(packet);
                         }
@@ -708,7 +743,7 @@ impl Device {
                     if flush {
                         // Flush pending queue
                         while let TunnResult::WriteToNetwork(packet) =
-                            peer.tunnel.decapsulate(None, &[], &mut t.dst_buf[..])
+                        peer.tunnel.decapsulate(None, &[], &mut t.dst_buf[..])
                         {
                             udp.write(packet);
                         }
